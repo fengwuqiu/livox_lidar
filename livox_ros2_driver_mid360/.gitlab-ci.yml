@@ -1,0 +1,83 @@
+# This file is a template, and might need editing before it works on your project.
+# use the official gcc image, based on debian
+# can use verions as well, like gcc:5.2
+# see https://hub.docker.com/_/gcc/
+stages:
+  - prepare
+  - build
+  - test
+  - make_deb
+image: 192.168.12.16:5000/sunny-ctirobot/cti_ade_base_humble:latest
+
+.tags: &tag
+  - humble
+.before_script:
+  before_script:
+    - echo "deb http://192.168.100.48:8081/repository/apt/ focal main" | tee  /etc/apt/sources.list.d/ctirobot.list
+    - wget -qO -  http://192.168.100.24/public.gpg.key  | apt-key add -
+    - apt update -y 
+    - '
+      apt install -y livox_sdk
+      
+      '
+
+build:
+  tags:
+    - humble
+  stage: build
+  extends: .before_script
+  script:
+    - MAKEFLAGS=-j12 colcon build --parallel-workers=24
+    - tar -czvf build.tar.gz build
+    - tar -czvf install.tar.gz install
+  # depending on your build setup it's most likely a good idea to cache outputs to reduce the build time
+  artifacts:
+    paths:
+      - build.tar.gz
+      - install.tar.gz
+    expire_in: 2 hours
+# run tests using the binary built before
+test:
+  tags:
+    - humble
+  stage: test
+  # rules:
+  #  - when: manual
+  extends: .before_script
+  script:
+    - tar -xzvf build.tar.gz
+    - tar -xzvf install.tar.gz
+    - MAKEFLAGS=-j12 colcon test --parallel-workers=24
+  artifacts:
+    paths:
+      - build.tar.gz
+      - install.tar.gz
+      - dependencies.install.tar.gz
+    expire_in: 2 hours
+  only:
+    - humble
+  needs:
+    - build
+
+
+make_deb:
+  tags:
+    - humble
+  stage: make_deb
+  extends: .before_script
+  script:
+    - tar -xzvf install.tar.gz
+    - . ./install/setup.sh
+    - rosdep update
+    - sed -i 's/my $ignore_missing_info = 0;/my $ignore_missing_info = 1;/g' /usr/bin/dpkg-shlibdeps
+    - bash .make_deb.sh
+    - mv ../*.deb . && mv ../*.ddeb .
+    - bash .upload.sh
+  only:
+    - humble
+  artifacts:
+    paths:
+      - "*.deb"
+    expire_in: 1 week
+  needs:
+    - test
